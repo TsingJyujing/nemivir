@@ -59,6 +59,8 @@ services:
       FILER_SERVER: http://filer:9401/
       prometheus_multiproc_dir: /prometheus_multiproc_dir
       WEB_CONCURRENCY: 1
+      IMG_CACHE_SIZE: 128
+      IMG_CACHE_TIMEOUT: 600
     volumes:
       - "./data/prometheus/:/prometheus_multiproc_dir"
     depends_on:

@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir \
     pillow \
     requests \
     prometheus_client \
+    redis-lru \
     python-multipart
 
 COPY . .
