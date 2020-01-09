@@ -38,11 +38,15 @@ class RedisImageCache:
             raise KeyError("Can't find key {} in redis".format(fk))
 
     def _clean_by_pattern(self, pattern: str, batch_count: int = 100):
+        log.info("Cleaning by pattern: {}".format(pattern))
+
         def delete_keys(items):
             pipeline = self.redis_client.pipeline()
             for item in items:
                 pipeline.delete(item)
+                log.debug("Removing item {}".format(item))
             pipeline.execute()
+            time.sleep(0.01)
 
         keys = []
         for key in self.redis_client.scan_iter(pattern, count=batch_count):
@@ -50,15 +54,16 @@ class RedisImageCache:
             if len(keys) >= batch_count:
                 delete_keys(keys)
                 keys = []
-                time.sleep(0.01)
-        else:
-            delete_keys(keys)
+        delete_keys(keys)
 
     def clean(self, filename: str, key: str = None):
         if key is None:
             self._clean_by_pattern(self._generate_key(filename, "*"))
         else:
             self.redis_client.delete(self._generate_key(filename, key))
+
+    def clean_hash(self, image_hash: str):
+        self._clean_by_pattern("{}_{}*".format(self.key_prefix, image_hash))
 
     def clean_all(self):
         self._clean_by_pattern("{}_*".format(self.key_prefix))

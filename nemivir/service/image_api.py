@@ -195,7 +195,7 @@ def get_one_image_by_hash(
     """
     request_count.labels("get_one_image_by_hash").inc()
     return __get_image_cache(
-        filename=filer_server.list_images(image_hash, 1)[0]["FullPath"],
+        filename=filer_server.list_images(image_hash, 1)[0]["FullPath"].strip("/"),
         rescale=rescale, h=h, w=w,
         image_format=image_format,
     )
@@ -213,6 +213,7 @@ def delete_specified_image(
     """
     request_count.labels("delete_specified_image").inc()
     filer_server.delete_file("{}/{}".format(image_hash, filename))
+    cache.clean("{}/{}".format(image_hash, filename))
     return {"status": "success"}
 
 
@@ -230,6 +231,7 @@ def delete_images_by_hash(
         recursive=True,
         ignore_recursive_error=True
     )
+    cache.clean_hash(image_hash)
     return {"status": "success"}
 
 
