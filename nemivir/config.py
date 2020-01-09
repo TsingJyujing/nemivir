@@ -18,7 +18,7 @@ filer_server = WeedFiler(filer_node=os.environ["FILER_SERVER"])
 
 cache = RedisImageCache(
     redis_client=StrictRedis.from_url(os.environ["REDIS_SERVER"]),
-    default_ttl=float(os.environ.get("IMG_CACHE_TIMEOUT", "1800")),
+    default_ttl=int(os.environ.get("IMG_CACHE_TIMEOUT", "1800")),
     key_prefix="nimc"
 )
 # max_size=int(os.environ.get("IMG_CACHE_SIZE", "512"))

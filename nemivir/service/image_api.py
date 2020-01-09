@@ -2,6 +2,7 @@ import gc
 import logging
 import socket
 import time
+import traceback
 from io import BytesIO
 from typing import List
 
@@ -13,7 +14,7 @@ from requests import HTTPError, Response
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
-from nemivir.config import filer_server, redis_connection_pool
+from nemivir.config import filer_server, redis_connection_pool, cache
 from nemivir.image import get_hash
 from nemivir.util import RedisDistributedLock, get_random_string, LazyResource
 
@@ -114,6 +115,9 @@ async def requests_http_error_handler(request: Request, exc: ParameterError):
 @app.exception_handler(Exception)
 async def requests_http_error_handler(request: Request, exc: Exception):
     fail_count.labels(500, str(type(exc))).inc()
+    log.error("Some internal error caused: {}".format(
+        traceback.format_exc()
+    ))
     return JSONResponse(
         status_code=500,
         content={
@@ -166,7 +170,7 @@ def get_specified_image(
     - **image_format**:  the image format to return, WEBP/PNG/JPG/...
     """
     request_count.labels("get_specified_image").inc()
-    return __get_image(
+    return __get_image_cache(
         filename="{}/{}".format(image_hash, filename),
         rescale=rescale, h=h, w=w,
         image_format=image_format,
@@ -190,7 +194,7 @@ def get_one_image_by_hash(
     - **image_format**:  the image format to return, WEBP/PNG/JPG/...
     """
     request_count.labels("get_one_image_by_hash").inc()
-    return __get_image(
+    return __get_image_cache(
         filename=filer_server.list_images(image_hash, 1)[0]["FullPath"],
         rescale=rescale, h=h, w=w,
         image_format=image_format,
@@ -229,6 +233,42 @@ def delete_images_by_hash(
     return {"status": "success"}
 
 
+def __get_image_cache(
+        filename: str,
+        rescale: float,
+        h: int,
+        w: int,
+        image_format: str
+):
+    request_count.labels("__get_image_cache").inc()
+
+    param_key = "({},{},{},{})".format(
+        image_format,
+        w if w else "-",
+        h if h else "-",
+        "{:.3f}".format(rescale) if rescale else "-"
+    )
+
+    try:
+        data = cache.get(filename, key=param_key)
+        log.info("Hit cache on KEY {}_{}".format(filename, param_key))
+    except KeyError:
+        data = __get_image(
+            filename,
+            rescale,
+            h,
+            w,
+            image_format
+        )
+        log.info("Create cache on KEY {}_{}".format(filename, param_key))
+        cache.put(filename, param_key, data)
+    return Response(
+        content=data,
+        status_code=200,
+        media_type="image"
+    )
+
+
 def __get_image(
         filename: str,
         rescale: float,
@@ -245,9 +285,8 @@ def __get_image(
     - **w**:  Width limit
     - **image_format**:  The image format to return, none means using original format
     """
-    request_count.labels("get_image").inc()
-    param_key = "({},{},{},{})".format(image_format, rescale, w, h)
-    if param_key.
+    request_count.labels("__get_image").inc()
+
     # Parameter verify
     if rescale is not None and (rescale > 1.0 or rescale <= 0):
         raise ParameterError("Invalid value rescale={}".format(rescale))
@@ -267,23 +306,20 @@ def __get_image(
             image_final_format = im.format.lower()
         else:
             image_final_format = image_format.lower()
-        media_type = "image/{}".format(image_final_format)
+        # FIXME serialize media type in cache
+        # media_type = "image/{}".format(image_final_format)
         need_transform = not (image_format is None or (image_format.upper() == im.format))
 
         need_rescale = rescale is not None
         need_resize = h is not None and w is not None
 
         # FIXME for now we can't deal with the animated image
-        if im.is_animated:
+        if getattr(im, "is_animated", False):
             need_transform = False
             need_rescale = False
             need_resize = False
         if not need_transform and not need_rescale and not need_resize:
-            return Response(
-                content=data,
-                status_code=200,
-                media_type=media_type
-            )
+            return data
 
         # Apply resize stage by parameters
         if rescale is not None:
@@ -299,7 +335,7 @@ def __get_image(
             im.save(fp, format=image_final_format)
             fp.seek(0)
             data = fp.read()
-        return Response(content=data, status_code=200, media_type=media_type)
+        return data
 
 
 @app.post("/upload")

@@ -1,6 +1,9 @@
+import logging
 import time
 
 from redis import StrictRedis
+
+log = logging.getLogger(__file__)
 
 
 class RedisImageCache:
@@ -22,7 +25,7 @@ class RedisImageCache:
             key,
         )
 
-    def put(self, filename: str, key: str, value: bytes, ttl: float = None):
+    def put(self, filename: str, key: str, value: bytes, ttl: int = None):
         if ttl is None:
             ttl = self.default_ttl
         return self.redis_client.setex(self._generate_key(filename, key), ttl, value)
