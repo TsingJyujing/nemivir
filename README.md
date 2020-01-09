@@ -34,8 +34,13 @@ In filer, dirs are named by the hash of the image, and all the files in the dir 
 
 ## Quick Start
 
+### Integration Test
+
+```bash
+docker-compose up --build --force-recreate --exit-code-from nemivir_unit_test
+```
+
 ## API Documentation
 
 I'm using FastAPI's doc generator, please running the service and open homepage or http://ip:port/docs for more details.
 
-# docker-compose up --build --force-recreate --exit-code-from nemivir_unit_test
