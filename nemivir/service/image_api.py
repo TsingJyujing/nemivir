@@ -231,10 +231,10 @@ def delete_images_by_hash(
 
 def __get_image(
         filename: str,
-        rescale: float = None,
-        h: int = None,
-        w: int = None,
-        image_format: str = None
+        rescale: float,
+        h: int,
+        w: int,
+        image_format: str
 ):
     """
     Image resource
@@ -246,6 +246,8 @@ def __get_image(
     - **image_format**:  The image format to return, none means using original format
     """
     request_count.labels("get_image").inc()
+    param_key = "({},{},{},{})".format(image_format, rescale, w, h)
+    if param_key.
     # Parameter verify
     if rescale is not None and (rescale > 1.0 or rescale <= 0):
         raise ParameterError("Invalid value rescale={}".format(rescale))
@@ -267,9 +269,15 @@ def __get_image(
             image_final_format = image_format.lower()
         media_type = "image/{}".format(image_final_format)
         need_transform = not (image_format is None or (image_format.upper() == im.format))
+
         need_rescale = rescale is not None
         need_resize = h is not None and w is not None
 
+        # FIXME for now we can't deal with the animated image
+        if im.is_animated:
+            need_transform = False
+            need_rescale = False
+            need_resize = False
         if not need_transform and not need_rescale and not need_resize:
             return Response(
                 content=data,
@@ -285,7 +293,8 @@ def __get_image(
             im = im.resource.resize(
                 size=(w, h)
             )
-
+        if image_final_format == "JPEG":
+            im = im.convert("RGB")
         with BytesIO() as fp:
             im.save(fp, format=image_final_format)
             fp.seek(0)
