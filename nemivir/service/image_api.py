@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from nemivir.config import filer_server, redis_connection_pool, cache
 from nemivir.image import get_hash
+from nemivir.protos import ImageResponse, create_image_response
 from nemivir.util import RedisDistributedLock, get_random_string, LazyResource
 
 app = FastAPI(
@@ -252,10 +253,10 @@ def __get_image_cache(
     )
 
     try:
-        data = cache.get(filename, key=param_key)
+        image_response = cache.get(filename, key=param_key)
         log.info("Hit cache on KEY {}_{}".format(filename, param_key))
     except KeyError:
-        data = __get_image(
+        image_response = __get_image(
             filename,
             rescale,
             h,
@@ -263,11 +264,11 @@ def __get_image_cache(
             image_format
         )
         log.info("Create cache on KEY {}_{}".format(filename, param_key))
-        cache.put(filename, param_key, data)
+        cache.put(filename, param_key, image_response)
     return Response(
-        content=data,
+        content=image_response.content,
         status_code=200,
-        media_type="image"
+        media_type=image_response.media_type
     )
 
 
@@ -277,7 +278,7 @@ def __get_image(
         h: int,
         w: int,
         image_format: str
-):
+) -> ImageResponse:
     """
     Image resource
     - **filename**:
@@ -308,8 +309,7 @@ def __get_image(
             image_final_format = im.format.lower()
         else:
             image_final_format = image_format.lower()
-        # FIXME serialize media type in cache
-        # media_type = "image/{}".format(image_final_format)
+        media_type = "image/{}".format(image_final_format)
         need_transform = not (image_format is None or (image_format.upper() == im.format))
 
         need_rescale = rescale is not None
@@ -321,7 +321,7 @@ def __get_image(
             need_rescale = False
             need_resize = False
         if not need_transform and not need_rescale and not need_resize:
-            return data
+            return create_image_response(data, media_type)
 
         # Apply resize stage by parameters
         if rescale is not None:
@@ -337,7 +337,7 @@ def __get_image(
             im.save(fp, format=image_final_format)
             fp.seek(0)
             data = fp.read()
-        return data
+        return create_image_response(data, media_type)
 
 
 @app.post("/upload")

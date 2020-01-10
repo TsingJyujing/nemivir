@@ -1,12 +1,10 @@
 version: '3'
 
-# weed/redis/...'s exposed port is only for debug
-
 services:
   master:
     image: chrislusf/seaweedfs
     ports:
-      - 9333:9333 # todo remove this port expose
+      - 9333:9333
     command: "master -mdir /data -ip=master"
     volumes:
       - "./data/meta/:/data/"
@@ -17,7 +15,7 @@ services:
   volume:
     image: chrislusf/seaweedfs
     ports:
-      - 9301:9301 # todo remove this port expose
+      - 9301:9301
     command: 'volume -max=30 -mserver="master:9333" -port=9301'
     volumes:
       - "./data/volume/:/data/"
@@ -30,7 +28,7 @@ services:
   filer:
     image: chrislusf/seaweedfs
     ports:
-      - 9401:9401 # todo remove this port expose
+      - 9401:9401
     command: 'filer -master="master:9333" -port=9401 -dirListLimit 1000000'
     volumes:
       - "./data/filer/:/data/filerldb2/"
@@ -44,7 +42,7 @@ services:
   redis:
     image: redis:5.0
     ports:
-      - 6379:6379 # todo remove this port expose
+      - 6379:6379
     volumes:
       - "./data/redis/:/data/"
   nemivir:
@@ -59,7 +57,6 @@ services:
       FILER_SERVER: http://filer:9401/
       prometheus_multiproc_dir: /prometheus_multiproc_dir
       WEB_CONCURRENCY: 1
-      IMG_CACHE_SIZE: 128
       IMG_CACHE_TIMEOUT: 600
     volumes:
       - "./data/prometheus/:/prometheus_multiproc_dir"
@@ -73,6 +70,6 @@ services:
       dockerfile: Dockerfile
     command: "python3 -u unit_test.py"
     volumes:
-    - "./test_images/:/data"
+      - "./test_images/:/data"
     depends_on:
       - nemivir

@@ -3,6 +3,8 @@ import time
 
 from redis import StrictRedis
 
+from nemivir.protos import ImageResponse
+
 log = logging.getLogger(__file__)
 
 
@@ -12,7 +14,6 @@ class RedisImageCache:
             redis_client: StrictRedis,
             default_ttl: float,
             key_prefix: str = "imc"
-            # todo max_size limit
     ):
         self.key_prefix = key_prefix
         self.default_ttl = default_ttl
@@ -25,15 +26,17 @@ class RedisImageCache:
             key,
         )
 
-    def put(self, filename: str, key: str, value: bytes, ttl: int = None):
+    def put(self, filename: str, key: str, value: ImageResponse, ttl: int = None):
         if ttl is None:
             ttl = self.default_ttl
-        return self.redis_client.setex(self._generate_key(filename, key), ttl, value)
+        self.redis_client.setex(self._generate_key(filename, key), ttl, value.SerializeToString())
 
-    def get(self, filename: str, key: str):
+    def get(self, filename: str, key: str) -> ImageResponse:
         fk = self._generate_key(filename, key)
         if self.redis_client.exists(fk):
-            return self.redis_client.get(fk)
+            resp = ImageResponse()
+            resp.ParseFromString(self.redis_client.get(fk))
+            return resp
         else:
             raise KeyError("Can't find key {} in redis".format(fk))
 

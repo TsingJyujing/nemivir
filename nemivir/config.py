@@ -5,7 +5,7 @@ from redis import ConnectionPool, StrictRedis
 from nemivir.image import WeedFiler
 # REDIS_SERVER
 # redis://[:password]@host:port/db
-from nemivir.util.cache import RedisImageCache
+from nemivir.util import RedisImageCache
 
 client = ConnectionPool.from_url(os.environ["REDIS_SERVER"])
 redis_connection_pool = [
@@ -21,4 +21,3 @@ cache = RedisImageCache(
     default_ttl=int(os.environ.get("IMG_CACHE_TIMEOUT", "1800")),
     key_prefix="nimc"
 )
-# max_size=int(os.environ.get("IMG_CACHE_SIZE", "512"))

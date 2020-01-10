@@ -1,0 +1,7 @@
+syntax = "proto3";
+package nemivir.protos;
+
+message ImageResponse {
+    bytes content = 1;
+    string media_type = 2;
+}

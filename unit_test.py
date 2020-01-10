@@ -1,9 +1,10 @@
 import json
 import logging
+import random
 import time
 from io import BytesIO
-import random
 from urllib.parse import urljoin, urlencode
+
 import numpy
 import requests
 from PIL import Image
@@ -57,29 +58,36 @@ def verify_image(filename: str):
 
             start_time = time.time()
 
-            resp = requests.get(
-                urljoin(service_path, "/hash/{}".format(image_hash)),
-                params=urlencode(params)
-            )
-            resp.raise_for_status()
-            response_data = resp.content
-            log.info("Response got, size={} headers={}".format(
-                len(response_data),
-                json.dumps({
-                    k: v for k, v in resp.headers.items()
-                }, indent=2)
-            ))
-            passed_time = time.time() - start_time
+            passed_time = []
+            for i in range(3):
+                resp = requests.get(
+                    urljoin(service_path, "/hash/{}".format(image_hash)),
+                    params=urlencode(params)
+                )
+                resp.raise_for_status()
+                response_data = resp.content
+                log.info("Response got, size={} headers={}".format(
+                    len(response_data),
+                    json.dumps({
+                        k: v for k, v in resp.headers.items()
+                    }, indent=2)
+                ))
+                if i == 0:
+                    t = time.time() - start_time
+                else:
+                    t = time.time() - start_time - passed_time[-1]
+                passed_time.append(t)
+
             with BytesIO(response_data) as fp:
                 im_load = Image.open(fp)
                 difference = compare_difference(
                     im_load, im
                 )
-                report_detail = "scale={} format={} diff={} used={}ms".format(
+                report_detail = "scale={} format={} diff={} used=({})ms".format(
                     rescale,
                     image_format,
                     difference,
-                    passed_time * 1000
+                    ",".join("{:.4f}".format(t) for t in passed_time)
                 )
                 if difference > 6:
                     raise Exception("Failed while checking hash where: {}".format(report_detail))
