@@ -16,7 +16,7 @@ services:
     image: chrislusf/seaweedfs
     ports:
       - 9301:9301
-    command: 'volume -max=30 -mserver="master:9333" -port=9301'
+    command: 'volume -max=100 -mserver="master:9333" -port=9301'
     volumes:
       - "./data/volume/:/data/"
     healthcheck:
@@ -25,20 +25,20 @@ services:
       timeout: 5s
     depends_on:
       - master
-  filer:
-    image: chrislusf/seaweedfs
+  mongodb:
+    image: mongo:4
     ports:
-      - 9401:9401
-    command: 'filer -master="master:9333" -port=9401 -dirListLimit 1000000'
+      # Don't expose it maybe safer
+      - 27018:27017
+    # Set according your machine memory size
+    command: --wiredTigerCacheSizeGB 0.7
+    environment:
+      # If the mongodb won't expose, maybe you can comment these settings
+      MONGO_INITDB_ROOT_USERNAME: admin
+      # todo: Change the password here in production
+      MONGO_INITDB_ROOT_PASSWORD: adminpass
     volumes:
-      - "./data/filer/:/data/filerldb2/"
-    healthcheck:
-      test: "curl 'http://localhost:9401/?limit=1' -f -H 'Accept: application/json'|| exit 1"
-      interval: 10s
-      timeout: 5s
-    depends_on:
-      - master
-      - volume
+      - "./data/mongodb/:/data/db"
   redis:
     image: redis:5.0
     ports:
@@ -54,14 +54,15 @@ services:
       dockerfile: Dockerfile
     environment:
       REDIS_SERVER: redis://redis:6379/
-      FILER_SERVER: http://filer:9401/
+      MASTER_SERVER: http://master:9333/
+      MONGODB_META: mongodb://admin:adminpass@mongodb:27017/
       prometheus_multiproc_dir: /prometheus_multiproc_dir
       WEB_CONCURRENCY: 1
       IMG_CACHE_TIMEOUT: 600
     volumes:
       - "./data/prometheus/:/prometheus_multiproc_dir"
     depends_on:
-      - filer
+      - mongodb
       - redis
   nemivir_unit_test:
     image: nemivir

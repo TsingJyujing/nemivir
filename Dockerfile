@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
     numpy \
     pillow \
     requests \
+    pymongo \
     prometheus_client \
     redis-lru \
     protobuf \

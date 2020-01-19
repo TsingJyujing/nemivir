@@ -1,4 +1,5 @@
 import gc
+import json
 import logging
 import socket
 import time
@@ -14,10 +15,10 @@ from requests import HTTPError, Response
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
-from nemivir.config import filer_server, redis_connection_pool, cache
+from nemivir.config import filesystem, redis_connection_pool, cache, metadb
 from nemivir.image import get_hash
 from nemivir.protos import ImageResponse, create_image_response
-from nemivir.util import RedisDistributedLock, get_random_string, LazyResource
+from nemivir.util import RedisDistributedLock, LazyResource
 
 app = FastAPI(
     title="Nemivir Image Database",
@@ -129,7 +130,7 @@ async def requests_http_error_handler(request: Request, exc: Exception):
 
 
 @app.get("/list/hash")
-def list_hashes(limit: int = 1000):
+def list_hashes(limit: int = -1):
     """
     Get all hashes information
     - **limit**: Limit the number of the return
@@ -137,7 +138,7 @@ def list_hashes(limit: int = 1000):
     request_count.labels("list_hashes").inc()
     return {
         "status": "success",
-        "hashes": filer_server.list_dirs("/", limit)
+        "hashes": metadb.list_hashes(limit)
     }
 
 
@@ -149,13 +150,12 @@ def list_images(image_hash: str, limit: int = 1000):
     - **limit**: Limit the number of the return
     """
     request_count.labels("list_images").inc()
-    return filer_server.list_images("/{}".format(image_hash), limit)
+    return metadb.list_images(image_hash, limit)
 
 
-@app.get("/image/{image_hash}/{filename}")
+@app.get("/image/{fid}")
 def get_specified_image(
-        image_hash: str,
-        filename: str,
+        fid: str,
         rescale: float = None,
         h: int = None,
         w: int = None,
@@ -163,8 +163,7 @@ def get_specified_image(
 ):
     """
     Get a image name by specified filename
-    - **image_hash**: Image hash
-    - **filename**: file name under the hash
+    - **fid**: File ID
     - **rescale**:  resize image by ratio (0.0~1.0) before response, don't input means don't apply change
     - **h**:  resize image by height and width
     - **w**:  resize image by height and width
@@ -172,7 +171,7 @@ def get_specified_image(
     """
     request_count.labels("get_specified_image").inc()
     return __get_image_cache(
-        filename="{}/{}".format(image_hash, filename),
+        fid=fid,
         rescale=rescale, h=h, w=w,
         image_format=image_format,
     )
@@ -195,17 +194,20 @@ def get_one_image_by_hash(
     - **image_format**:  the image format to return, WEBP/PNG/JPG/...
     """
     request_count.labels("get_one_image_by_hash").inc()
+    image_info = metadb.list_images(image_hash, limit=1)
+    if len(image_info) <= 0:
+        raise Exception("Can't find image by hash: {}".format(image_hash))
+    fid = image_info[0]["fid"]
     return __get_image_cache(
-        filename=filer_server.list_images(image_hash, 1)[0]["FullPath"].strip("/"),
+        fid=fid,
         rescale=rescale, h=h, w=w,
         image_format=image_format,
     )
 
 
-@app.delete("/image/{image_hash}/{filename}")
+@app.delete("/image/{fid}")
 def delete_specified_image(
-        image_hash: str,
-        filename: str
+        fid: str
 ):
     """
     Remove the image by filename
@@ -213,8 +215,9 @@ def delete_specified_image(
     - **filename**: file name under the hash
     """
     request_count.labels("delete_specified_image").inc()
-    filer_server.delete_file("{}/{}".format(image_hash, filename))
-    cache.clean("{}/{}".format(image_hash, filename))
+    filesystem.delete(fid)
+    metadb.remove_image(fid)
+    cache.clean(fid)
     return {"status": "success"}
 
 
@@ -227,17 +230,19 @@ def delete_images_by_hash(
     - **image_hash**: Image hash
     """
     request_count.labels("delete_images_by_hash").inc()
-    filer_server.delete_dir(
-        image_hash,
-        recursive=True,
-        ignore_recursive_error=True
-    )
-    cache.clean_hash(image_hash)
+    __delete_hash(image_hash)
     return {"status": "success"}
 
 
+def __delete_hash(image_hash: str) -> int:
+    for i in metadb.list_images(image_hash):
+        filesystem.delete(i["fid"])
+        cache.clean(i["fid"])
+    return metadb.remove_hash(image_hash)
+
+
 def __get_image_cache(
-        filename: str,
+        fid: str,
         rescale: float,
         h: int,
         w: int,
@@ -253,18 +258,18 @@ def __get_image_cache(
     )
 
     try:
-        image_response = cache.get(filename, key=param_key)
-        log.info("Hit cache on KEY {}_{}".format(filename, param_key))
+        image_response = cache.get(fid, key=param_key)
+        log.info("Hit cache on KEY {}_{}".format(fid, param_key))
     except KeyError:
         image_response = __get_image(
-            filename,
+            fid,
             rescale,
             h,
             w,
             image_format
         )
-        log.info("Create cache on KEY {}_{}".format(filename, param_key))
-        cache.put(filename, param_key, image_response)
+        log.info("Create cache on KEY {}_{}".format(fid, param_key))
+        cache.put(fid, param_key, image_response)
     return Response(
         content=image_response.content,
         status_code=200,
@@ -273,7 +278,7 @@ def __get_image_cache(
 
 
 def __get_image(
-        filename: str,
+        fid: str,
         rescale: float,
         h: int,
         w: int,
@@ -300,7 +305,7 @@ def __get_image(
     if rescale is not None and w is not None:
         raise ParameterError("Parameter rescale/(w&h) are mutually exclusive.")
 
-    data = filer_server.read_file(filename)
+    data = filesystem.read(fid)
 
     with BytesIO(data) as bio:
         im = Image.open(bio)
@@ -349,6 +354,7 @@ def upload_image(
         method: int = 6,
         lossless: bool = False,
         quality: int = 80,
+        attach_info: str = "{}"
 ):
     """
     Upload a new image
@@ -365,6 +371,7 @@ def upload_image(
     - **method**: Compress method from 0~6, 0 is fastest and 6 is slowest
     - **lossless**: lossless=true will make file large
     - **quality**: 0~100, default is 80, a good trade-off between size and quality
+    - **attach_info**: JSON formatted attach info, an object/dictionary
     """
     request_count.labels("upload_image").inc()
     return __commit_image_file(
@@ -374,7 +381,8 @@ def upload_image(
         image_format,
         method,
         lossless,
-        quality
+        quality,
+        attach_info
     )
 
 
@@ -387,6 +395,7 @@ def batch_upload_image(
         method: int = 6,
         lossless: bool = False,
         quality: int = 80,
+        attach_info: str = "{}"
 ):
     """
     Upload new images
@@ -403,6 +412,7 @@ def batch_upload_image(
     - **method**: Compress method from 0~6, 0 is fastest and 6 is slowest
     - **lossless**: lossless=true will make file large
     - **quality**: 0~100, default is 80, a good trade-off between size and quality
+    - **attach_info**: JSON formatted attach info, an object/dictionary
     """
     request_count.labels("batch_upload_image").inc()
     response_all = []
@@ -415,7 +425,8 @@ def batch_upload_image(
                 image_format,
                 method,
                 lossless,
-                quality
+                quality,
+                attach_info
             ))
         except Exception as ex:
             response_all.append({
@@ -437,10 +448,11 @@ def __commit_image_file(
         method: int,
         lossless: bool,
         quality: int,
-
+        attach_info: str
 ):
     """
     Commit single file to weed FS filer
+
     :param data:
     :param mode:
     :param auto_remove:
@@ -448,27 +460,44 @@ def __commit_image_file(
     :param method:
     :param lossless:
     :param quality:
+    :param attach_info:
     :return:
     """
     request_count.labels("__commit_image_file").inc()
     if mode not in {"keep", "block", "largest"}:
         raise ParameterError("mode should in keep/block/largest.")
 
+    try:
+        attach_obj = json.loads(attach_info)
+    except Exception as ex:
+        log.warning("Error while parsing attach info as JSON caused by: {}".format(str(ex)))
+        attach_obj = {}
     with BytesIO(data) as fp:
         im = Image.open(fp)
+        width = im.width
+        height = im.height
+        im_format = im.format
+        attach_obj["mode"] = im.mode
+        attach_obj["tick"] = int(time.time() * 1000)
+        attach_obj["w"] = width
+        attach_obj["h"] = height
         image_format = image_format.upper()
-        # Means don't need convert
+        # That means don't need convert
         image_format_matched = image_format.lower() == "original" or im.format == image_format
-        hash_id = get_hash(im)
+        image_hash = get_hash(im)
+        is_animated = getattr(im, "is_animated", False)
+        attach_obj["is_animated"] = is_animated
         if not image_format_matched:
             # Won't convert animated image
-            if hasattr(im, "is_animated") and im.is_animated:
+            if is_animated:
                 log.warning("Can't convert animated image format from {} -> {}".format(
                     im.format,
                     image_format
                 ))
+
             else:
                 with BytesIO() as wio:
+                    im_format = image_format.upper()
                     if image_format == "WEBP":
                         im.save(
                             wio,
@@ -482,26 +511,27 @@ def __commit_image_file(
                     wio.seek(0)
                     data = wio.read()
         # Get image hash by hash function
-
-    lazy_file_list = LazyResource(lambda: filer_server.list_images(hash_id))
+    attach_obj["format"] = im_format
+    lazy_existed_file_info = LazyResource(lambda: metadb.list_images(image_hash))
+    # Lock the hash in redis
     with RedisDistributedLock(Redlock(
             redis_connection_pool
-    ), hash_id) as _:
+    ), image_hash) as _:
         if mode == "keep":
             need_to_write = True
         else:
-            if len(lazy_file_list.resource) <= 0:
+            if len(lazy_existed_file_info.resource) <= 0:
                 need_to_write = True
             else:
                 if mode == "block":
                     need_to_write = False
                 elif mode == "largest":
-                    # FIXME for now using file size to evaluate, using resolution is better!!!
-                    # But before we're using MongoDB, it's hard to do this operation
-                    max_file_size = max(
-                        sum(chuck["size"] for chuck in info["chunks"]) for info in lazy_file_list.resource
+                    max_image_size = max(
+                        int(info["w"]) * int(info["h"])
+                        for info in lazy_existed_file_info.resource
+                        if "w" in info and "h" in info
                     )
-                    need_to_write = len(data) > max_file_size
+                    need_to_write = (width * height) > max_image_size
                 else:
                     raise Exception("Unknown mode: {}".format(mode))
         if need_to_write:
@@ -509,31 +539,27 @@ def __commit_image_file(
             # <image hash>/<hostname>_<micro sec tick(%x)>_<random str>.img
             removed = []
             if auto_remove:
-                for info in lazy_file_list.resource:
-                    fn = info["FullPath"]
-                    filer_server.delete_file(fn)
-                    removed.append(fn)
-            write_filename = "{}/{}_{:x}_{}.img".format(
-                hash_id,
-                socket.gethostname(),
-                int(time.time() * 1_000_000),
-                get_random_string(8)
-            )
-            filer_server.write_data(
-                write_filename,
+                __delete_hash(image_hash=image_hash)
+            fid = filesystem.write(
                 data
             )
-
+            attach_obj["content_size"] = len(data)
+            metadb.add_image(
+                image_hash=image_hash,
+                fid=fid,
+                **attach_obj
+            )
             return {
                 "status": "success",
                 "wrote": True,
-                "filename": write_filename,
+                "fid": fid,
                 "removed": removed,
-                "hash": hash_id,
+                "hash": image_hash,
+                "attach": attach_obj
             }
         else:
             return {
                 "status": "success",
                 "wrote": False,
-                "hash": hash_id,
+                "hash": image_hash,
             }
