@@ -2,7 +2,7 @@ import os
 
 from redis import ConnectionPool, StrictRedis
 
-from nemivir.image import WeedFiler
+from nemivir.image import WeedFileSystem, AbstractFileSystem, MongoDBMeta, AbstractImageMeta
 # REDIS_SERVER
 # redis://[:password]@host:port/db
 from nemivir.util import RedisImageCache
@@ -12,9 +12,11 @@ redis_connection_pool = [
     {"connection_pool": client},
 ]
 
-# FILER_SERVER
+# MASTER_SERVER
 # protocal://host:port/
-filer_server = WeedFiler(filer_node=os.environ["FILER_SERVER"])
+filesystem: AbstractFileSystem = WeedFileSystem(os.environ["MASTER_SERVER"])
+
+metadb: AbstractImageMeta = MongoDBMeta(os.environ["MONGODB_META"], "nemivir", "image_meta")
 
 cache = RedisImageCache(
     redis_client=StrictRedis.from_url(os.environ["REDIS_SERVER"]),
