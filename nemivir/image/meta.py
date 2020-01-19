@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List
 from warnings import warn
 
-from pymongo import MongoClient
+from pymongo import MongoClient, IndexModel, DESCENDING, ASCENDING, HASHED
 
 
 class AbstractImageMeta(ABC):
@@ -41,10 +41,13 @@ class AbstractImageMeta(ABC):
 
 class MongoDBMeta(AbstractImageMeta):
     def __init__(self, mongodb_url: str, db_name: str, collection_name: str):
-        # FIXME check index info
         self.collection_name = collection_name
         self.db_name = db_name
         self._conn: MongoClient = MongoClient(mongodb_url)
+        self._get_collection().create_indexes([
+            IndexModel([("image_hash", HASHED)]),
+            IndexModel([("fid", ASCENDING)], unique=True),
+        ])
 
     def _get_collection(self):
         return self._conn.get_database(self.db_name).get_collection(self.collection_name)
